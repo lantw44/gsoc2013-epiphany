@@ -115,6 +115,7 @@ typedef enum
 #define EPHY_PREFS_CACHE_SIZE                     "cache-size"
 #define EPHY_PREFS_NEW_WINDOWS_IN_TABS            "new-windows-in-tabs"
 #define EPHY_PREFS_AUTO_DOWNLOADS                 "automatic-downloads"
+#define EPHY_PREFS_EXTRACT_DOWNLOADED_ARCHIVES    "extract-downloaded-archives"
 #define EPHY_PREFS_WARN_ON_CLOSE_UNSUBMITTED_DATA "warn-on-close-unsubmitted-data"
 #define EPHY_PREFS_REMEMBER_PASSWORDS             "remember-passwords"
 #define EPHY_PREFS_KEYWORD_SEARCH_URL             "keyword-search-url"

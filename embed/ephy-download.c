@@ -36,6 +36,8 @@
 #include <errno.h>
 #include <glib/gi18n.h>
 #include <string.h>
+#include <archive.h>
+#include <archive_entry.h>
 
 G_DEFINE_TYPE (EphyDownload, ephy_download, G_TYPE_OBJECT)
 
@@ -631,6 +633,21 @@ ephy_download_do_download_action (EphyDownload *download,
     return ret;
 }
 
+/**
+ * ephy_download_do_extract_archive:
+ * @download: an #EphyDownload
+ *
+ * Extract downloaded archives for @download.
+ *
+ * Returns: %TRUE if the extraction succeeded.
+ *
+ **/
+gboolean
+ephy_download_do_extract_archive (EphyDownload *download)
+{
+  return TRUE;
+}
+
 static void
 ephy_download_dispose (GObject *object)
 {
@@ -890,6 +907,10 @@ download_finished_cb (WebKitDownload *wk_download,
   priv = download->priv;
 
   g_signal_emit_by_name (download, "completed");
+
+  if(g_settings_get_boolean (EPHY_SETTINGS_MAIN, EPHY_PREFS_EXTRACT_DOWNLOADED_ARCHIVES)){
+    ephy_download_do_extract_archive (download);
+  }
 
   if (g_settings_get_boolean (EPHY_SETTINGS_MAIN, EPHY_PREFS_AUTO_DOWNLOADS) &&
       priv->action == EPHY_DOWNLOAD_ACTION_NONE)

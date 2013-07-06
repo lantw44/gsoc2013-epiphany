@@ -104,6 +104,7 @@ void          ephy_download_set_action            (EphyDownload *download,
                                                    EphyDownloadActionType action);
 gboolean      ephy_download_do_download_action    (EphyDownload *download,
                                                    EphyDownloadActionType action);
+gboolean      ephy_download_do_extract_archive    (EphyDownload *download);
 
 GtkWidget    *ephy_download_get_widget            (EphyDownload *download);
 void          ephy_download_set_widget            (EphyDownload *download,
