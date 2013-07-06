@@ -41,6 +41,9 @@
 
 G_DEFINE_TYPE (EphyDownload, ephy_download, G_TYPE_OBJECT)
 
+/* This line is copied from file-roller */
+#define BUFFER_SIZE (64 * 1024)
+
 #define EPHY_DOWNLOAD_GET_PRIVATE(o) \
   (G_TYPE_INSTANCE_GET_PRIVATE ((o), EPHY_TYPE_DOWNLOAD, EphyDownloadPrivate))
 
