@@ -250,6 +250,7 @@ lib/history/Makefile
 lib/widgets/Makefile
 embed/Makefile
 embed/web-extension/Makefile
+autoarchive/Makefile
 src/Makefile
 src/bookmarks/Makefile
 po/Makefile.in
