@@ -1,4 +1,4 @@
-SUBDIRS = lib embed src autoarchive data po doc
+SUBDIRS = autoarchive lib embed src data po doc
 
 if ENABLE_TESTS
 SUBDIRS += tests
