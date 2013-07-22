@@ -648,102 +648,6 @@ ephy_download_do_download_action (EphyDownload *download,
 gboolean
 ephy_download_do_extract_archive (EphyDownload *download)
 {
-  gboolean failed;
-  struct archive *ar;
-  struct archive *ar_writer;
-  struct archive_entry *entry;
-  char *archive_filename;
-  char *output_dir;
-  int r;
-
-  failed = FALSE;
-
-  archive_filename = g_filename_from_uri (download->priv->destination, NULL, NULL);
-  if (archive_filename == NULL)
-    return FALSE;
-
-  output_dir = g_path_get_dirname (archive_filename);
-  if (*output_dir == '.') {
-    g_free (output_dir);
-    output_dir = ephy_file_get_downloads_dir ();
-  }
-
-  LOG ("ephy_download_do_extract_archive archive file: %s", archive_filename);
-  LOG ("ephy_download_do_extract_archive output dir: %s", output_dir);
-
-  ar = archive_read_new ();
-  archive_read_support_filter_all (ar);
-  archive_read_support_format_all (ar);
-
-  ar_writer = archive_write_disk_new ();
-  archive_write_disk_set_options (ar_writer,
-                                  ARCHIVE_EXTRACT_OWNER |
-                                  ARCHIVE_EXTRACT_PERM |
-                                  ARCHIVE_EXTRACT_TIME |
-                                  ARCHIVE_EXTRACT_NO_OVERWRITE |
-                                  ARCHIVE_EXTRACT_ACL |
-                                  ARCHIVE_EXTRACT_FFLAGS |
-                                  ARCHIVE_EXTRACT_XATTR |
-                                  ARCHIVE_EXTRACT_SPARSE);
-  archive_write_disk_set_standard_lookup (ar_writer);
-
-  if (archive_read_open_filename(ar, archive_filename, BUFFER_SIZE) != ARCHIVE_OK) {
-    LOG ("ephy_download_do_extract_archive cannot open then archive file");
-    archive_read_free (ar);
-    archive_write_free (ar_writer);
-    g_free (archive_filename);
-    return FALSE;
-  }
-
-  while(archive_read_next_header (ar, &entry) == ARCHIVE_OK) {
-    struct archive_entry *entry_writer;
-    char *extracted_filename;
-
-    extracted_filename = (char*)archive_entry_pathname (entry);
-    LOG ("ephy_download_do_extract_archive file name in archive: %s", extracted_filename);
-    entry_writer = archive_entry_clone (entry);
-
-    if(*extracted_filename != '/')
-      extracted_filename = g_build_path (G_DIR_SEPARATOR_S, output_dir, extracted_filename, NULL);
-
-    LOG ("ephy_download_do_extract_archive extracted file: %s", extracted_filename);
-    archive_entry_set_pathname (entry_writer, extracted_filename);
-
-    if ((r = archive_write_header (ar_writer, entry_writer)) != ARCHIVE_OK) {
-      LOG ("ephy_download_do_extract_archive header FAILED");
-      g_free (extracted_filename);
-      archive_entry_free (entry_writer);
-      continue;
-    }
-
-    LOG ("ephy_download_do_extract_archive header OK");
-
-    if (archive_entry_size (entry) > 0) {
-      size_t size;
-      off_t offset;
-      const void* buffer;
-      while ((r = archive_read_data_block (ar, &buffer, &size, &offset) == ARCHIVE_OK) &&
-                  archive_write_data (ar_writer, buffer, size) >= 0);
-      if (r != ARCHIVE_EOF)
-        failed = TRUE;
-    }
-
-    archive_write_finish_entry (ar_writer);
-    archive_entry_free (entry_writer);
-    g_free (extracted_filename);
-  }
-
-  archive_read_close (ar);
-  archive_read_free (ar);
-  archive_write_close (ar_writer);
-  archive_write_free (ar_writer);
-  g_free (archive_filename);
-  g_free (output_dir);
-
-  if (failed) {
-    return FALSE;
-  }
-
   return TRUE;
 }
 
@@ -1008,9 +912,7 @@ download_finished_cb (WebKitDownload *wk_download,
   g_signal_emit_by_name (download, "completed");
 
   if(g_settings_get_boolean (EPHY_SETTINGS_MAIN, EPHY_PREFS_EXTRACT_DOWNLOADED_ARCHIVES)){
-    gboolean extract_ok;
-    extract_ok = ephy_download_do_extract_archive (download);
-    LOG ("download_finished_cb extract_ok: %hhd", extract_ok);
+    ephy_download_do_extract_archive (download);
   }
 
   if (g_settings_get_boolean (EPHY_SETTINGS_MAIN, EPHY_PREFS_AUTO_DOWNLOADS) &&
