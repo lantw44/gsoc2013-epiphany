@@ -29,6 +29,7 @@
 #ifndef _EPHY_DOWNLOAD_H
 #define _EPHY_DOWNLOAD_H
 
+#include <autoarchive/autoarchive.h>
 #include <glib-object.h>
 #include <webkit2/webkit2.h>
 
@@ -57,6 +58,7 @@ struct _EphyDownloadClass
   GObjectClass parent_class;
 
   void (* completed)  (EphyDownload *download);
+  void (* archive)    (EphyDownload *download);
   void (* error)      (EphyDownload *download,
                        gint error_code,
                        gint error_detail,
@@ -90,6 +92,7 @@ void          ephy_download_set_destination_uri   (EphyDownload *download,
                                                    const char *destination);
 
 WebKitDownload *ephy_download_get_webkit_download (EphyDownload *download);
+AutoarExtract  *ephy_download_get_autoar_extract  (EphyDownload *download);
 
 const char   *ephy_download_get_destination_uri   (EphyDownload *download);
 const char   *ephy_download_get_source_uri        (EphyDownload *download);
@@ -104,7 +107,7 @@ void          ephy_download_set_action            (EphyDownload *download,
                                                    EphyDownloadActionType action);
 gboolean      ephy_download_do_download_action    (EphyDownload *download,
                                                    EphyDownloadActionType action);
-gboolean      ephy_download_do_extract_archive    (EphyDownload *download);
+void          ephy_download_do_extract_archive    (EphyDownload *download);
 
 GtkWidget    *ephy_download_get_widget            (EphyDownload *download);
 void          ephy_download_set_widget            (EphyDownload *download,
