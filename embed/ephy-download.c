@@ -36,8 +36,6 @@
 #include <errno.h>
 #include <glib/gi18n.h>
 #include <string.h>
-#include <archive.h>
-#include <archive_entry.h>
 
 G_DEFINE_TYPE (EphyDownload, ephy_download, G_TYPE_OBJECT)
 
@@ -50,6 +48,7 @@ G_DEFINE_TYPE (EphyDownload, ephy_download, G_TYPE_OBJECT)
 struct _EphyDownloadPrivate
 {
   WebKitDownload *download;
+  AutoarExtract *arextract;
 
   char *destination;
   char *source;
@@ -367,6 +366,9 @@ ephy_download_set_destination_uri (EphyDownload *download,
   g_return_if_fail (scheme != NULL);
   g_free (scheme);
 
+  if (priv->destination != NULL)
+    g_free (priv->destination);
+
   priv->destination = g_strdup (destination);
 
   g_object_notify (G_OBJECT (download), "destination");
@@ -457,6 +459,22 @@ ephy_download_get_webkit_download (EphyDownload *download)
   g_return_val_if_fail (EPHY_IS_DOWNLOAD (download), NULL);
 
   return download->priv->download;
+}
+
+/**
+ * ephy_download_get_autoar_extract:
+ * @download: an #EphyDownload
+ *
+ * Gets the #AutoarExtract being wrapped by @download.
+ *
+ * Returns: (transfer none): a #AutoarExtract.
+ **/
+AutoarExtract *
+ephy_download_get_autoar_extract (EphyDownload *download)
+{
+  g_return_val_if_fail (EPHY_IS_DOWNLOAD (download), NULL);
+
+  return download->priv->arextract;
 }
 
 /**
@@ -601,7 +619,7 @@ ephy_download_do_download_action (EphyDownload *download,
 
     priv = download->priv;
 
-    destination_uri = webkit_download_get_destination (priv->download);
+    destination_uri = priv->destination;
     destination = g_file_new_for_uri (destination_uri);
 
     switch ((action ? action : priv->action)) {
@@ -636,19 +654,39 @@ ephy_download_do_download_action (EphyDownload *download,
     return ret;
 }
 
-/**
- * ephy_download_do_extract_archive:
- * @download: an #EphyDownload
- *
- * Extract downloaded archives for @download.
- *
- * Returns: %TRUE if the extraction succeeded.
- *
- **/
-gboolean
+void
 ephy_download_do_extract_archive (EphyDownload *download)
 {
-  return TRUE;
+  AutoarPref *arpref;
+  AutoarExtract *arextract;
+  GSettings *settings;
+
+  settings = g_settings_new (AUTOAR_PREF_DEFAULT_GSCHEMA_ID);
+  arpref = autoar_pref_new_with_gsettings (settings);
+
+  if (!autoar_pref_check_file_name (arpref, download->priv->destination)) {
+    LOG ("ephy_download_do_extract_archive: not an archive");
+    g_object_unref (settings);
+    g_object_unref (arpref);
+    return;
+  }
+
+  arextract = autoar_extract_new (download->priv->destination,
+                                  ephy_file_get_downloads_dir (),
+                                  arpref);
+
+  if (download->priv->arextract != NULL)
+    g_object_unref (download->priv->arextract);
+
+  download->priv->arextract = arextract;
+  g_signal_emit_by_name (download, "archive");
+
+  autoar_extract_start_async (arextract);
+
+  g_object_unref (settings);
+  g_object_unref (arpref);
+
+  return;
 }
 
 static void
@@ -665,6 +703,11 @@ ephy_download_dispose (GObject *object)
     g_signal_handlers_disconnect_matched (priv->download, G_SIGNAL_MATCH_DATA, 0, 0, 0, 0, download);
     g_object_unref (priv->download);
     priv->download = NULL;
+  }
+
+  if (priv->arextract) {
+    g_object_unref (priv->arextract);
+    priv->arextract = NULL;
   }
 
   if (priv->window) {
@@ -835,6 +878,20 @@ ephy_download_class_init (EphyDownloadClass *klass)
                 G_TYPE_NONE,
                 0);
   /**
+   * EphyDownload::archive:
+   *
+   * The ::archive signal is emitted when @download is going to extract the
+   * downloaded archive files.
+   **/
+  g_signal_new ("archive",
+                G_OBJECT_CLASS_TYPE (object_class),
+                G_SIGNAL_RUN_LAST,
+                G_STRUCT_OFFSET (EphyDownloadClass, archive),
+                NULL, NULL,
+                g_cclosure_marshal_VOID__VOID,
+                G_TYPE_NONE,
+                0);
+  /**
    * EphyDownload::error:
    *
    * The ::error signal wraps the @download ::error signal.
@@ -857,6 +914,8 @@ ephy_download_init (EphyDownload *download)
   LOG ("EphyDownload initialising %p", download);
 
   download->priv->download = NULL;
+  download->priv->arextract = NULL;
+
   download->priv->destination = NULL;
 
   download->priv->action = EPHY_DOWNLOAD_ACTION_NONE;
