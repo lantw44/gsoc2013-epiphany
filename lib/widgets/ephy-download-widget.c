@@ -412,7 +412,6 @@ widget_archive_error_cb (AutoarExtract *arextract,
   update_download_label_and_tooltip (widget, errmsg);
   update_download_icon (widget);
   g_free (dest);
-  g_error_free (error);
 }
 
 static void
