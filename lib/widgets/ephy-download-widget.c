@@ -400,6 +400,7 @@ widget_archive_error_cb (AutoarExtract *arextract,
 {
   const char *uri = webkit_download_get_destination (ephy_download_get_webkit_download (widget->priv->download));
   char *dest = g_path_get_basename (uri);
+  char *errmsg;
   LOG ("widget_archive_error_cb: error: %s", error->message);
   LOG ("widget_archive_error_cb: text: %s => %s",
        gtk_label_get_text (GTK_LABEL (widget->priv->text)), dest);
@@ -407,7 +408,8 @@ widget_archive_error_cb (AutoarExtract *arextract,
        ephy_download_get_destination_uri (widget->priv->download), uri);
   gtk_label_set_text (GTK_LABEL (widget->priv->text), dest);
   ephy_download_set_destination_uri (widget->priv->download, uri);
-  update_download_label_and_tooltip (widget, _("Finished (extraction failed)"));
+  errmsg = g_strdup_printf (_("Finished (extraction error: %s)"), error->message);
+  update_download_label_and_tooltip (widget, errmsg);
   update_download_icon (widget);
   g_free (dest);
   g_error_free (error);
