@@ -448,7 +448,8 @@ static void
 folder_activate_cb (GtkMenuItem *item, EphyDownloadWidget *widget)
 {
   if (ephy_download_do_download_action (widget->priv->download,
-                                        EPHY_DOWNLOAD_ACTION_BROWSE_TO))
+                                        EPHY_DOWNLOAD_ACTION_BROWSE_TO) &&
+     (widget->priv->arextract == NULL || widget->priv->arextract_ok))
     gtk_widget_destroy (GTK_WIDGET (widget));
 }
 static void
@@ -503,7 +504,8 @@ download_menu_clicked_cb (GtkWidget *button,
 
   item = gtk_menu_item_new_with_label (_("Open"));
   gtk_menu_shell_append (GTK_MENU_SHELL (menu), item);
-  gtk_widget_set_sensitive (item, widget->priv->finished && !widget->priv->arextract_ok);
+  gtk_widget_set_sensitive (item, widget->priv->finished &&
+                                  widget->priv->arextract == NULL);
   g_signal_connect (item, "activate",
                     G_CALLBACK (open_activate_cb), widget);
 
