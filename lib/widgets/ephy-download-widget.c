@@ -55,7 +55,7 @@ struct _EphyDownloadWidgetPrivate
   GtkWidget *icon;
 
   gboolean finished;
-  gboolean arextract_ok;
+  gboolean archive_end;
 };
 
 enum
@@ -411,6 +411,9 @@ widget_archive_error_cb (AutoarExtract *arextract,
   errmsg = g_strdup_printf (_("Finished (extraction error: %s)"), error->message);
   update_download_label_and_tooltip (widget, errmsg);
   update_download_icon (widget);
+  widget->priv->archive_end = TRUE;
+  g_object_unref (widget->priv->arextract);
+  widget->priv->arextract = NULL;
   g_free (dest);
 }
 
@@ -418,7 +421,7 @@ static void
 widget_archive_completed_cb (AutoarExtract *arextract,
                              EphyDownloadWidget *widget)
 {
-  widget->priv->arextract_ok = TRUE;
+  widget->priv->archive_end = TRUE;
   update_download_label_and_tooltip (widget, _("Finished"));
 }
 
@@ -449,7 +452,7 @@ folder_activate_cb (GtkMenuItem *item, EphyDownloadWidget *widget)
 {
   if (ephy_download_do_download_action (widget->priv->download,
                                         EPHY_DOWNLOAD_ACTION_BROWSE_TO) &&
-     (widget->priv->arextract == NULL || widget->priv->arextract_ok))
+     (widget->priv->arextract == NULL || widget->priv->archive_end))
     gtk_widget_destroy (GTK_WIDGET (widget));
 }
 static void
@@ -637,7 +640,7 @@ ephy_download_widget_init (EphyDownloadWidget *self)
   GtkStyleContext *context;
 
   self->priv = DOWNLOAD_WIDGET_PRIVATE (self);
-  self->priv->arextract_ok = FALSE;
+  self->priv->archive_end = FALSE;
 
   gtk_orientable_set_orientation (GTK_ORIENTABLE (self),
                                   GTK_ORIENTATION_HORIZONTAL);
