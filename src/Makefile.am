@@ -163,7 +163,6 @@ epiphany_LDADD = \
 	$(top_builddir)/lib/history/libephyhistory.la \
 	$(top_builddir)/lib/libephymisc.la \
 	$(top_builddir)/lib/egg/libegg.la \
-	$(top_builddir)/autoarchive/libautoarchive.la \
 	$(DEPENDENCIES_LIBS) \
 	$(CODE_COVERAGE_LDFLAGS) \
 	$(LIBINTL)
