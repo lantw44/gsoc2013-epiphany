@@ -113,7 +113,6 @@ LDADD = \
 	$(top_builddir)/lib/history/libephyhistory.la \
 	$(top_builddir)/lib/libephymisc.la \
 	$(top_builddir)/lib/egg/libegg.la \
-	$(top_builddir)/autoarchive/libautoarchive.la \
 	$(DBUS_LIBS) \
 	$(CODE_COVERAGE_LDFLAGS) \
 	$(DEPENDENCIES_LIBS) 

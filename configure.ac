@@ -84,7 +84,6 @@ GSETTINGS_DESKTOP_SCHEMAS_REQUIRED=0.0.1
 LIBNOTIFY_REQUIRED=0.5.1
 GCR_REQUIRED=3.5.5
 AVAHI_REQUIRED=0.6.22
-LIBARCHIVE_REQUIRED=3.0.0
 
 WEBKIT_GTK_PC_NAME=webkit2gtk-3.0
 AC_DEFINE([HAVE_WEBKIT2],[1],[Define if building with WebKit2])
@@ -121,7 +120,7 @@ PKG_CHECK_MODULES([DEPENDENCIES], [
 		  gcr-3 >= $GCR_REQUIRED
 		  avahi-gobject >= $AVAHI_REQUIRED
 		  avahi-client >= $AVAHI_REQUIRED
-		  libarchive >= $LIBARCHIVE_REQUIRED
+		  gnome-autoar
 		  ])
 
 PKG_CHECK_MODULES(WEB_EXTENSION, [
@@ -135,7 +134,7 @@ AC_SUBST(WEB_EXTENSION_LIBS)
 # Portability checks
 # ******************
 
-AC_CHECK_FUNCS([getgrnam getpwnam link localtime_r memchr memmove memset mkdir mkdtemp mkfifo mknod realpath sqrt strchr strcspn strdup strerror strrchr strtol strtoul strstr])
+AC_CHECK_FUNCS([localtime_r memchr memmove memset mkdir mkdtemp realpath sqrt strchr strcspn strdup strerror strrchr strtol strtoul strstr])
 
 # for backtrace()
 AC_CHECK_HEADERS([execinfo.h fcntl.h])
@@ -250,7 +249,6 @@ lib/history/Makefile
 lib/widgets/Makefile
 embed/Makefile
 embed/web-extension/Makefile
-autoarchive/Makefile
 src/Makefile
 src/bookmarks/Makefile
 po/Makefile.in
