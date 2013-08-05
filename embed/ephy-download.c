@@ -681,7 +681,7 @@ ephy_download_do_extract_archive (EphyDownload *download)
   download->priv->arextract = arextract;
   g_signal_emit_by_name (download, "archive");
 
-  autoar_extract_start_async (arextract);
+  autoar_extract_start_async (arextract, NULL);
 
   g_object_unref (settings);
   g_object_unref (arpref);
