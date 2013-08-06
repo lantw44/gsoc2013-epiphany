@@ -660,11 +660,13 @@ ephy_download_do_extract_archive (EphyDownload *download)
   AutoarPref *arpref;
   AutoarExtract *arextract;
   GSettings *settings;
+  GCancellable *cancellable;
 
   settings = g_settings_new (AUTOAR_PREF_DEFAULT_GSCHEMA_ID);
   arpref = autoar_pref_new_with_gsettings (settings);
 
-  if (!autoar_pref_check_file_name (arpref, download->priv->destination)) {
+  if (!autoar_pref_check_file_name (arpref, download->priv->destination) &&
+      !autoar_pref_check_mime_type (arpref, download->priv->destination)) {
     LOG ("ephy_download_do_extract_archive: not an archive");
     g_object_unref (settings);
     g_object_unref (arpref);
@@ -679,12 +681,14 @@ ephy_download_do_extract_archive (EphyDownload *download)
     g_object_unref (download->priv->arextract);
 
   download->priv->arextract = arextract;
-  g_signal_emit_by_name (download, "archive");
+  cancellable = g_cancellable_new ();
+  g_signal_emit_by_name (download, "archive", cancellable);
 
-  autoar_extract_start_async (arextract, NULL);
+  autoar_extract_start_async (arextract, cancellable);
 
   g_object_unref (settings);
   g_object_unref (arpref);
+  g_object_unref (cancellable);
 
   return;
 }
@@ -888,9 +892,10 @@ ephy_download_class_init (EphyDownloadClass *klass)
                 G_SIGNAL_RUN_LAST,
                 G_STRUCT_OFFSET (EphyDownloadClass, archive),
                 NULL, NULL,
-                g_cclosure_marshal_VOID__VOID,
+                g_cclosure_marshal_generic,
                 G_TYPE_NONE,
-                0);
+                1,
+                G_TYPE_CANCELLABLE);
   /**
    * EphyDownload::error:
    *

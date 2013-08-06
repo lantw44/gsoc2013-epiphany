@@ -44,8 +44,9 @@ G_DEFINE_TYPE (EphyDownloadWidget, ephy_download_widget, GTK_TYPE_BOX)
 
 struct _EphyDownloadWidgetPrivate
 {
-  EphyDownload *download;
+  EphyDownload  *download;
   AutoarExtract *arextract;
+  GCancellable  *arcancel;
 
   GtkWidget *text;
   GtkWidget *remaining;
@@ -55,7 +56,6 @@ struct _EphyDownloadWidgetPrivate
   GtkWidget *icon;
 
   gboolean finished;
-  gboolean archive_end;
 };
 
 enum
@@ -208,6 +208,25 @@ update_download_label_and_tooltip (EphyDownloadWidget *widget,
   gtk_label_set_text (GTK_LABEL (widget->priv->remaining), download_label);
   gtk_widget_set_tooltip_text (GTK_WIDGET (widget), remaining_tooltip);
   g_free (remaining_tooltip);
+}
+
+static void
+revert_download_icon_and_text (EphyDownloadWidget *widget)
+{
+  WebKitDownload *wk_download = ephy_download_get_webkit_download (widget->priv->download);
+  const char *uri = webkit_download_get_destination (wk_download);
+  char *dest = g_path_get_basename (uri);
+
+  LOG ("widget_archive_error_cb: text: %s => %s",
+       gtk_label_get_text (GTK_LABEL (widget->priv->text)), dest);
+  LOG ("widget_archive_error_cb: download: %s => %s",
+       ephy_download_get_destination_uri (widget->priv->download), uri);
+
+  gtk_label_set_text (GTK_LABEL (widget->priv->text), dest);
+  ephy_download_set_destination_uri (widget->priv->download, uri);
+  update_download_icon (widget);
+
+  g_free (dest);
 }
 
 static gboolean
@@ -398,46 +417,55 @@ widget_archive_error_cb (AutoarExtract *arextract,
                          GError *error,
                          EphyDownloadWidget *widget)
 {
-  const char *uri = webkit_download_get_destination (ephy_download_get_webkit_download (widget->priv->download));
-  char *dest = g_path_get_basename (uri);
   char *errmsg;
-  LOG ("widget_archive_error_cb: error: %s", error->message);
-  LOG ("widget_archive_error_cb: text: %s => %s",
-       gtk_label_get_text (GTK_LABEL (widget->priv->text)), dest);
-  LOG ("widget_archive_error_cb: download: %s => %s",
-       ephy_download_get_destination_uri (widget->priv->download), uri);
-  gtk_label_set_text (GTK_LABEL (widget->priv->text), dest);
-  ephy_download_set_destination_uri (widget->priv->download, uri);
+
   errmsg = g_strdup_printf (_("Finished (extraction error: %s)"), error->message);
+  LOG ("widget_archive_error_cb: error: %s", error->message);
+
+  revert_download_icon_and_text (widget);
   update_download_label_and_tooltip (widget, errmsg);
-  update_download_icon (widget);
-  widget->priv->archive_end = TRUE;
+
   g_object_unref (widget->priv->arextract);
   widget->priv->arextract = NULL;
-  g_free (dest);
+}
+
+static void
+widget_archive_cancelled_cb (AutoarExtract *arextract,
+                          EphyDownloadWidget *widget)
+{
+  revert_download_icon_and_text (widget);
+  update_download_label_and_tooltip (widget, _("Finished (extraction cancelled)"));
+  g_object_unref (widget->priv->arextract);
+  widget->priv->arextract = NULL;
 }
 
 static void
 widget_archive_completed_cb (AutoarExtract *arextract,
                              EphyDownloadWidget *widget)
 {
-  widget->priv->archive_end = TRUE;
   update_download_label_and_tooltip (widget, _("Finished"));
+  g_object_unref (widget->priv->arextract);
+  widget->priv->arextract = NULL;
 }
 
 static void
 widget_archive_cb (EphyDownload *ephy_download,
+                   GCancellable *cancellable,
                    EphyDownloadWidget *widget)
 {
   AutoarExtract *arextract = ephy_download_get_autoar_extract (ephy_download);
   if (widget->priv->arextract != NULL)
     g_object_unref (widget->priv->arextract);
   widget->priv->arextract = g_object_ref (arextract);
+  if (widget->priv->arcancel != NULL)
+    g_object_unref (widget->priv->arcancel);
+  widget->priv->arcancel = g_object_ref (cancellable);
   g_signal_connect (arextract, "decide-dest", G_CALLBACK (widget_archive_decide_cb), widget);
   g_signal_connect (arextract, "progress", G_CALLBACK (widget_archive_progress_cb), widget);
-  g_signal_connect (arextract, "completed", G_CALLBACK (widget_archive_completed_cb), widget);
   g_signal_connect (arextract, "error", G_CALLBACK (widget_archive_error_cb), widget);
-  update_download_label_and_tooltip (widget, _("Extracting…"));
+  g_signal_connect (arextract, "cancelled", G_CALLBACK (widget_archive_cancelled_cb), widget);
+  g_signal_connect (arextract, "completed", G_CALLBACK (widget_archive_completed_cb), widget);
+  update_download_label_and_tooltip (widget, _("Preparing for extraction…"));
 }
 
 static void
@@ -452,14 +480,18 @@ folder_activate_cb (GtkMenuItem *item, EphyDownloadWidget *widget)
 {
   if (ephy_download_do_download_action (widget->priv->download,
                                         EPHY_DOWNLOAD_ACTION_BROWSE_TO) &&
-     (widget->priv->arextract == NULL || widget->priv->archive_end))
+     (widget->priv->arextract == NULL))
     gtk_widget_destroy (GTK_WIDGET (widget));
 }
 static void
 cancel_activate_cb (GtkMenuItem *item, EphyDownloadWidget *widget)
 {
-  ephy_download_cancel (widget->priv->download);
-  gtk_widget_destroy (GTK_WIDGET (widget));
+  if (widget->priv->finished) {
+    g_cancellable_cancel (widget->priv->arcancel);
+  } else {
+    ephy_download_cancel (widget->priv->download);
+    gtk_widget_destroy (GTK_WIDGET (widget));
+  }
 }
 
 static void
@@ -498,7 +530,7 @@ download_menu_clicked_cb (GtkWidget *button,
 
   item = gtk_menu_item_new_with_label (_("Cancel"));
   gtk_menu_shell_append (GTK_MENU_SHELL (menu), item);
-  gtk_widget_set_sensitive (item, !widget->priv->finished);
+  gtk_widget_set_sensitive (item, !widget->priv->finished || widget->priv->arextract != NULL);
   g_signal_connect (item, "activate",
                     G_CALLBACK (cancel_activate_cb), widget);
 
@@ -507,8 +539,7 @@ download_menu_clicked_cb (GtkWidget *button,
 
   item = gtk_menu_item_new_with_label (_("Open"));
   gtk_menu_shell_append (GTK_MENU_SHELL (menu), item);
-  gtk_widget_set_sensitive (item, widget->priv->finished &&
-                                  widget->priv->arextract == NULL);
+  gtk_widget_set_sensitive (item, widget->priv->finished);
   g_signal_connect (item, "activate",
                     G_CALLBACK (open_activate_cb), widget);
 
@@ -596,11 +627,17 @@ ephy_download_widget_dispose (GObject *object)
   if (widget->priv->arextract != NULL) {
     AutoarExtract *arextract = widget->priv->arextract;
     g_signal_handlers_disconnect_by_func (arextract, widget_archive_decide_cb, widget);
-    g_signal_handlers_disconnect_by_func (arextract, widget_archive_error_cb, widget);
     g_signal_handlers_disconnect_by_func (arextract, widget_archive_progress_cb, widget);
+    g_signal_handlers_disconnect_by_func (arextract, widget_archive_error_cb, widget);
+    g_signal_handlers_disconnect_by_func (arextract, widget_archive_cancelled_cb, widget);
     g_signal_handlers_disconnect_by_func (arextract, widget_archive_completed_cb, widget);
     g_object_unref (widget->priv->arextract);
     widget->priv->arextract = NULL;
+  }
+
+  if (widget->priv->arcancel != NULL) {
+    g_object_unref (widget->priv->arcancel);
+    widget->priv->arcancel = NULL;
   }
 
   G_OBJECT_CLASS (ephy_download_widget_parent_class)->dispose (object);
@@ -640,7 +677,8 @@ ephy_download_widget_init (EphyDownloadWidget *self)
   GtkStyleContext *context;
 
   self->priv = DOWNLOAD_WIDGET_PRIVATE (self);
-  self->priv->archive_end = FALSE;
+  self->priv->arextract = NULL;
+  self->priv->arcancel = NULL;
 
   gtk_orientable_set_orientation (GTK_ORIENTABLE (self),
                                   GTK_ORIENTATION_HORIZONTAL);
