@@ -48,6 +48,7 @@
 #include <gio/gio.h>
 #include <glib/gi18n.h>
 #include <glib/gstdio.h>
+#include <gnome-autoar/autoar.h>
 #include <gtk/gtk.h>
 #include <libsoup/soup.h>
 
@@ -1875,6 +1876,444 @@ close_web_view_cb (WebKitWebView *web_view,
     gtk_widget_destroy (widget);
 }
 
+#define EPHY_RESPONSE_SELECT 1
+typedef struct {
+  WebKitWebView *web_view;
+  WebKitFileChooserRequest *request;
+  AutoarPref *arpref;
+  GtkToggleButton *multiple;
+  GtkToggleButton *single;
+  GtkEntry *name;
+  GtkWidget *format;
+} FileChooserInfo;
+
+typedef struct {
+  FileChooserInfo *info;
+  GCancellable *cancellable;
+  GPtrArray *wk_filenames;
+  GSList *filenames;
+  char *dest;
+} ArchiveInfo;
+
+/* Forward Declaration */
+static void file_query_info_cb (GFile *file, GAsyncResult *res, ArchiveInfo *ainfo);
+
+static void
+file_chooser_info_ref (FileChooserInfo *info)
+{
+  g_object_ref (info->web_view);
+  g_object_ref (info->request);
+  g_object_ref (info->arpref);
+  g_object_ref (info->multiple);
+  g_object_ref (info->single);
+  g_object_ref (info->name);
+  g_object_ref (info->format);
+}
+
+static void
+file_chooser_info_free (FileChooserInfo *info)
+{
+  g_object_unref (info->web_view);
+  g_object_unref (info->request);
+  g_object_unref (info->arpref);
+  g_object_unref (info->multiple);
+  g_object_unref (info->single);
+  g_object_unref (info->name);
+  g_object_unref (info->format);
+  g_free (info);
+}
+
+static void
+archive_info_free (ArchiveInfo *ainfo)
+{
+  if (ainfo->info != NULL)
+    g_free (ainfo->info);
+  if (ainfo->cancellable != NULL)
+    g_object_unref (ainfo->cancellable);
+  if (ainfo->wk_filenames != NULL)
+    g_ptr_array_unref (ainfo->wk_filenames);
+  if (ainfo->filenames != NULL)
+    g_slist_free_full (ainfo->filenames, g_free);
+  if (ainfo->dest != NULL)
+    g_free (ainfo->dest);
+  g_free (ainfo);
+}
+
+static void
+run_file_chooser_cancel (ArchiveInfo *ainfo, GError *error, const char *reason)
+{
+  EphyWebView *web_view;
+  GtkWidget *error_dialog;
+
+  webkit_file_chooser_request_cancel (ainfo->info->request);
+
+  web_view = EPHY_WEB_VIEW (ainfo->info->web_view);
+  g_free (web_view->priv->status_message);
+  web_view->priv->status_message = NULL;
+  g_object_notify (G_OBJECT (web_view), "status-message");
+
+  if (error != NULL) {
+    error_dialog = gtk_message_dialog_new (NULL,
+                                           GTK_DIALOG_DESTROY_WITH_PARENT,
+                                           GTK_MESSAGE_ERROR,
+                                           GTK_BUTTONS_CLOSE,
+                                           "%s: %s",
+                                           reason,
+                                           error->message);
+    gtk_dialog_run (GTK_DIALOG (error_dialog));
+    gtk_widget_destroy (error_dialog);
+  }
+
+  archive_info_free (ainfo);
+}
+
+static void
+run_file_chooser_complete (ArchiveInfo *ainfo)
+{
+  EphyWebView *web_view;
+
+  g_ptr_array_add (ainfo->wk_filenames, NULL);
+  webkit_file_chooser_request_select_files (
+      ainfo->info->request, (const char * const *)(ainfo->wk_filenames->pdata));
+
+  web_view = EPHY_WEB_VIEW (ainfo->info->web_view);
+  g_free (web_view->priv->status_message);
+  web_view->priv->status_message = NULL;
+  g_object_notify (G_OBJECT (web_view), "status-message");
+
+  archive_info_free (ainfo);
+}
+
+static void
+run_file_chooser_next (ArchiveInfo *ainfo, gboolean add_to_wk_filenames)
+{
+  if (ainfo->filenames != NULL) {
+    char *deleteme = NULL;
+    deleteme = ainfo->filenames->data;
+    ainfo->filenames = g_slist_remove (ainfo->filenames, deleteme);
+    if (add_to_wk_filenames)
+      g_ptr_array_add (ainfo->wk_filenames, deleteme);
+    else
+      g_free (deleteme);
+  }
+
+  if (ainfo->filenames == NULL) {
+    run_file_chooser_complete (ainfo);
+  } else {
+    GFile *file;
+    file = g_file_new_for_path (ainfo->filenames->data);
+    g_file_query_info_async (file,
+                             G_FILE_ATTRIBUTE_STANDARD_TYPE,
+                             G_FILE_QUERY_INFO_NONE,
+                             G_PRIORITY_DEFAULT,
+                             ainfo->cancellable,
+                             (GAsyncReadyCallback)file_query_info_cb,
+                             ainfo);
+  }
+}
+
+static void
+archive_decide_dest_cb (AutoarCreate *arcreate,
+                        GFile *destination,
+                        ArchiveInfo *ainfo)
+{
+  char *filename;
+  filename = g_file_get_path (destination);
+  if (filename != NULL && ainfo->wk_filenames != NULL)
+    g_ptr_array_add (ainfo->wk_filenames, filename);
+  if (ainfo->dest != NULL)
+    g_free (ainfo->dest);
+  ainfo->dest = g_file_get_basename (destination);
+}
+
+static void
+archive_progress_cb (AutoarCreate *arcreate,
+                     guint64 completed_size,
+                     guint completed_files,
+                     ArchiveInfo *ainfo)
+{
+  EphyWebView *web_view = (EphyWebView*)(ainfo->info->web_view);
+  g_free (web_view->priv->status_message);
+  web_view->priv->status_message = g_strdup_printf (
+      _("Creating archive “%s”… %u files (%s) are archived"),
+      ainfo->dest, completed_files, g_format_size (completed_size));
+  g_object_notify ((GObject*)web_view, "status-message");
+}
+
+static void
+archive_cancelled_cb (AutoarCreate *arcreate,
+                      ArchiveInfo *ainfo)
+{
+  run_file_chooser_cancel (ainfo, NULL, NULL);
+}
+
+static void
+archive_completed_cb (AutoarCreate *arcreate,
+                      ArchiveInfo *ainfo)
+{
+  run_file_chooser_next (ainfo, FALSE);
+}
+
+static void
+archive_error_cb (AutoarCreate *arcreate,
+                  GError *error,
+                  ArchiveInfo *ainfo)
+{
+  run_file_chooser_cancel (ainfo, error, _("Error while creating archives"));
+}
+
+static void
+file_query_info_cb (GFile *file,
+                    GAsyncResult *res,
+                    ArchiveInfo *ainfo)
+{
+  GFileInfo *file_info;
+  GFileType file_type;
+  GError *error;
+
+  error = NULL;
+  file_info = g_file_query_info_finish (file, res, &error);
+  g_object_unref (file);
+
+  if (file_info == NULL) {
+    run_file_chooser_cancel (ainfo, error, _("Error while getting file information"));
+    g_error_free (error);
+    return;
+  }
+
+  file_type = g_file_info_get_file_type (file_info);
+  if (file_type == G_FILE_TYPE_DIRECTORY) {
+    AutoarCreate *arcreate;
+    const char *filename;
+    char *tmp, *output;
+
+    tmp = ephy_file_tmp_filename ("ephy-archive-XXXXXX", "dir");
+    output = g_build_filename (ephy_file_tmp_dir (), tmp, NULL);
+    filename = ainfo->filenames->data;
+    arcreate = autoar_create_new (ainfo->info->arpref, output, filename, NULL);
+
+    g_signal_connect (arcreate, "decide-dest",
+        G_CALLBACK (archive_decide_dest_cb), ainfo);
+    g_signal_connect (arcreate, "progress",
+        G_CALLBACK (archive_progress_cb), ainfo);
+    g_signal_connect (arcreate, "cancelled",
+        G_CALLBACK (archive_cancelled_cb), ainfo);
+    g_signal_connect (arcreate, "completed",
+        G_CALLBACK (archive_completed_cb), ainfo);
+    g_signal_connect (arcreate, "error",
+        G_CALLBACK (archive_error_cb), ainfo);
+
+    autoar_create_start_async (arcreate, ainfo->cancellable);
+    g_object_unref (arcreate);
+    g_free (output);
+    g_free (tmp);
+
+  } else {
+    run_file_chooser_next (ainfo, TRUE);
+  }
+}
+
+static void
+run_file_chooser_response_cb (GtkFileChooser *file_chooser,
+                              int response_id,
+                              FileChooserInfo *info)
+{
+  if (response_id == GTK_RESPONSE_OK || response_id == EPHY_RESPONSE_SELECT) {
+    ArchiveInfo *ainfo;
+    GCancellable *cancellable;
+    GSList *filenames, *iter;
+    int format, filter;
+    int c;
+
+    filenames = gtk_file_chooser_get_filenames (file_chooser);
+    autoar_gtk_format_filter_simple_get (info->format, &format, &filter);
+    for (iter = filenames, c = 0; iter != NULL; iter = iter->next, c++);
+
+    cancellable = g_cancellable_new ();
+    ainfo = g_new (ArchiveInfo, 1);
+    ainfo->info = info;
+    ainfo->cancellable = g_object_ref (cancellable);
+    ainfo->wk_filenames = g_ptr_array_new_with_free_func (g_free);
+    ainfo->filenames = NULL;
+    ainfo->dest = NULL;
+
+    autoar_pref_set_default_format (info->arpref, format);
+    autoar_pref_set_default_filter (info->arpref, filter);
+
+    if (gtk_toggle_button_get_active (info->single) && c > 1) {
+      AutoarCreate *arcreate;
+      GPtrArray *source;
+      char *output, *tmp;
+      const char *text;
+
+      source = g_ptr_array_new ();
+      for (iter = filenames; iter != NULL; iter = iter->next) {
+        g_ptr_array_add (source, iter->data);
+      }
+      g_ptr_array_add (source, NULL);
+
+      text = gtk_entry_get_text (info->name);
+      if (*text == '\0')
+        text = NULL;
+
+      tmp = ephy_file_tmp_filename ("ephy-archive-XXXXXX", "dir");
+      output = g_build_filename (ephy_file_tmp_dir (), tmp, text, NULL);
+      arcreate = autoar_create_newv (info->arpref, output,
+                                     (const char**)(source->pdata));
+
+      if (text != NULL) {
+        char *odir;
+        odir = g_build_filename (ephy_file_tmp_dir (), tmp, NULL);
+        g_mkdir_with_parents (odir, 0700);
+        autoar_create_set_output_is_dest (arcreate, TRUE);
+        g_free (odir);
+      }
+
+      g_signal_connect (arcreate, "decide-dest",
+          G_CALLBACK (archive_decide_dest_cb), ainfo);
+      g_signal_connect (arcreate, "progress",
+          G_CALLBACK (archive_progress_cb), ainfo);
+      g_signal_connect (arcreate, "cancelled",
+          G_CALLBACK (archive_cancelled_cb), ainfo);
+      g_signal_connect (arcreate, "completed",
+          G_CALLBACK (archive_completed_cb), ainfo);
+      g_signal_connect (arcreate, "error",
+          G_CALLBACK (archive_error_cb), ainfo);
+
+      autoar_create_start_async (arcreate, cancellable);
+
+      g_slist_free_full (filenames, g_free);
+      g_ptr_array_unref (source);
+      g_object_unref (arcreate);
+      g_free (output);
+      g_free (tmp);
+
+    } else if (gtk_toggle_button_get_active (info->multiple) || c <= 1) {
+      GFile *file;
+
+      ainfo->filenames = filenames;
+      file = g_file_new_for_path (filenames->data);
+      g_file_query_info_async (file,
+                               G_FILE_ATTRIBUTE_STANDARD_TYPE,
+                               G_FILE_QUERY_INFO_NONE,
+                               G_PRIORITY_DEFAULT,
+                               cancellable,
+                               (GAsyncReadyCallback)file_query_info_cb,
+                               ainfo);
+    }
+
+    g_object_unref (cancellable);
+
+  } else {
+    webkit_file_chooser_request_cancel (info->request);
+    file_chooser_info_free (info);
+  }
+
+  gtk_widget_destroy (GTK_WIDGET (file_chooser));
+}
+
+static gboolean
+run_file_chooser_cb (WebKitWebView *web_view,
+                     WebKitFileChooserRequest *request,
+                     gpointer user_data)
+{
+  GtkWidget *top_level;
+  GtkWidget *file_chooser;
+  GtkFileFilter *file_filter;
+  const char * const *selected_files;
+
+  GtkWidget *extra;
+  GSList *group;
+  GtkWidget *multiple_check;
+  GtkWidget *single_check;
+  GtkWidget *name_box, *name_label, *name_entry;
+  GtkWidget *format_box, *format_label, *format_combo;
+  GSettings *settings;
+  AutoarPref *arpref;
+
+  FileChooserInfo *info;
+
+  top_level = gtk_widget_get_toplevel (GTK_WIDGET (web_view));
+  file_chooser = gtk_file_chooser_dialog_new (_("Select Files"),
+                                              (GtkWindow*)top_level,
+                                              GTK_FILE_CHOOSER_ACTION_OPEN,
+                                              _("Open"), GTK_RESPONSE_OK,
+                                              _("Cancel"), GTK_RESPONSE_NO,
+                                              _("Select"), EPHY_RESPONSE_SELECT,
+                                              NULL);
+
+  file_filter = webkit_file_chooser_request_get_mime_types_filter (request);
+  if (file_filter != NULL)
+    gtk_file_chooser_set_filter (GTK_FILE_CHOOSER (file_chooser), file_filter);
+
+  selected_files = webkit_file_chooser_request_get_selected_files (request);
+  if (selected_files != NULL && strstr (selected_files[0], ephy_file_tmp_dir ()) == NULL)
+    gtk_file_chooser_select_filename (GTK_FILE_CHOOSER (file_chooser),
+                                      selected_files[0]);
+
+  gtk_file_chooser_set_select_multiple (GTK_FILE_CHOOSER (file_chooser), TRUE);
+
+  settings = g_settings_new (AUTOAR_PREF_DEFAULT_GSCHEMA_ID);
+  arpref = autoar_pref_new_with_gsettings (settings);
+
+  extra = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+
+  multiple_check = gtk_radio_button_new_with_mnemonic (NULL,
+      _("Archive selected folders. Each folder will become an archive."));
+  group = gtk_radio_button_get_group (GTK_RADIO_BUTTON (multiple_check));
+  gtk_box_pack_start (GTK_BOX (extra), multiple_check, FALSE, FALSE, 0);
+
+  single_check = gtk_radio_button_new_with_mnemonic (group,
+      _("Archive all selected files as an archive if multiple files are selected."));
+  gtk_box_pack_start (GTK_BOX (extra), single_check, FALSE, FALSE, 0);
+
+  name_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+  name_label = gtk_label_new (_("Archive file name:"));
+  name_entry = gtk_entry_new ();
+  g_object_bind_property (single_check, "active", name_entry, "sensitive", 0);
+  gtk_box_pack_start (GTK_BOX (name_box), name_label, FALSE, FALSE, 5);
+  gtk_box_pack_start (GTK_BOX (name_box), name_entry, FALSE, FALSE, 5);
+  gtk_box_pack_start (GTK_BOX (extra), name_box, FALSE, FALSE, 0);
+
+  format_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+  format_label = gtk_label_new (_("Archive format:"));
+  format_combo = autoar_gtk_format_filter_simple_new (
+      autoar_pref_get_default_format (arpref),
+      autoar_pref_get_default_filter (arpref));
+  gtk_box_pack_start (GTK_BOX (format_box), format_label, FALSE, FALSE, 5);
+  gtk_box_pack_start (GTK_BOX (format_box), format_combo, FALSE, FALSE, 5);
+  gtk_box_pack_start (GTK_BOX (extra), format_box, FALSE, FALSE, 0);
+
+  gtk_widget_show_all (extra);
+  gtk_file_chooser_set_extra_widget (GTK_FILE_CHOOSER (file_chooser), extra);
+
+  if (webkit_file_chooser_request_get_select_multiple (request)) {
+    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (multiple_check), TRUE);
+    gtk_widget_set_sensitive (name_entry, FALSE);
+  } else {
+    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (single_check), TRUE);
+    gtk_widget_set_sensitive (multiple_check, FALSE);
+  }
+
+  info = g_new (FileChooserInfo, 1);
+  info->web_view = web_view;
+  info->request = request;
+  info->arpref = arpref;
+  info->multiple = GTK_TOGGLE_BUTTON (multiple_check);
+  info->single = GTK_TOGGLE_BUTTON (single_check);
+  info->name = GTK_ENTRY (name_entry);
+  info->format = format_combo;
+  file_chooser_info_ref (info);
+
+  g_signal_connect (file_chooser, "response",
+      G_CALLBACK (run_file_chooser_response_cb), info);
+  gtk_widget_show (file_chooser);
+
+  g_object_unref (settings);
+  g_object_unref (arpref);
+
+  return TRUE;
+}
 
 static void
 zoom_changed_cb (WebKitWebView *web_view,
@@ -1942,6 +2381,10 @@ ephy_web_view_init (EphyWebView *web_view)
                     NULL);
   g_signal_connect (web_view, "load-failed",
                     G_CALLBACK (load_failed_cb),
+                    NULL);
+
+  g_signal_connect (web_view, "run-file-chooser",
+                    G_CALLBACK (run_file_chooser_cb),
                     NULL);
 
   g_signal_connect (web_view, "notify::zoom-level",
