@@ -1885,6 +1885,8 @@ typedef struct {
   GtkToggleButton *single;
   GtkEntry *name;
   GtkWidget *format;
+  int entry_edited       : 1;
+  int entry_internal_set : 1;
 } FileChooserInfo;
 
 typedef struct {
@@ -2212,6 +2214,110 @@ run_file_chooser_response_cb (GtkFileChooser *file_chooser,
   gtk_widget_destroy (GTK_WIDGET (file_chooser));
 }
 
+static void
+remove_file_extension (char *name, const char *extension)
+{
+  int name_len, extension_len, len_diff;
+
+  name_len = strlen (name);
+  extension_len = strlen (extension);
+  len_diff = name_len - extension_len;
+
+  if (len_diff - 1 >= 0 && name[len_diff - 1] == '.')
+    name[len_diff - 1] = '\0';
+  else
+    name[len_diff] = '\0';
+}
+
+static void
+run_file_chooser_format_combo_cb (GtkWidget *format_combo,
+                                  FileChooserInfo *info)
+{
+  int i;
+  int format, format_last, filter, filter_last;
+  char *extension, *text, *text_new;
+  GtkEntry *name_entry;
+
+  name_entry = info->name;
+  text = g_strdup (gtk_entry_get_text (name_entry));
+  g_strstrip (text);
+  if (*text == '\0') {
+    g_free (text);
+    return;
+  }
+
+  format_last = autoar_format_last ();
+  filter_last = autoar_filter_last ();
+
+  for (i = 1; i < filter_last; i++) {
+    const char *filter_extension;
+    filter_extension = autoar_filter_get_extension (i);
+    if (g_str_has_suffix (text, filter_extension) && *filter_extension) {
+      remove_file_extension (text, filter_extension);
+      break;
+    }
+  }
+
+  for (i = 1; i < format_last; i++) {
+    const char *format_extension;
+    format_extension = autoar_format_get_extension (i);
+    if (g_str_has_suffix (text, format_extension) && *format_extension) {
+      remove_file_extension (text, format_extension);
+      break;
+    }
+  }
+
+  autoar_gtk_format_filter_simple_get (format_combo, &format, &filter);
+  extension = autoar_format_filter_get_extension (format, filter);
+  text_new = g_strconcat (text, extension, NULL);
+
+  info->entry_internal_set = TRUE;
+  gtk_entry_set_text (name_entry, text_new);
+  info->entry_internal_set = FALSE;
+
+  g_free (extension);
+  g_free (text_new);
+  g_free (text);
+}
+
+static void
+run_file_chooser_name_entry_cb (GtkEntry *name_entry,
+                                GParamSpec *pspec,
+                                FileChooserInfo *info)
+{
+  if (!(info->entry_internal_set))
+    info->entry_edited = TRUE;
+}
+
+static void
+run_file_chooser_selection_changed_cb (GtkFileChooser *file_chooser,
+                                       FileChooserInfo *info)
+{
+  if (!(info->entry_edited)) {
+    GFile *selected_file;
+    char *selected_basename;
+
+    selected_file = gtk_file_chooser_get_file (file_chooser);
+    if (selected_file == NULL)
+      return;
+
+    selected_basename = g_file_get_basename (selected_file);
+    if (selected_basename == NULL) {
+      g_object_unref (selected_file);
+      return;
+    }
+
+    info->entry_internal_set = TRUE;
+    gtk_entry_set_text (info->name, selected_basename);
+    info->entry_internal_set = FALSE;
+
+    run_file_chooser_format_combo_cb (info->format, info);
+
+    g_object_unref (selected_file);
+    g_free (selected_basename);
+  }
+}
+
 static gboolean
 run_file_chooser_cb (WebKitWebView *web_view,
                      WebKitFileChooserRequest *request,
@@ -2271,8 +2377,12 @@ run_file_chooser_cb (WebKitWebView *web_view,
   name_label = gtk_label_new (_("Archive file name:"));
   name_entry = gtk_entry_new ();
   g_object_bind_property (single_check, "active", name_entry, "sensitive", 0);
+  if (selected_files != NULL)
+    gtk_entry_set_text (GTK_ENTRY (name_entry), selected_files[0]);
+  else
+    gtk_entry_set_text (GTK_ENTRY (name_entry), _("Archive"));
   gtk_box_pack_start (GTK_BOX (name_box), name_label, FALSE, FALSE, 5);
-  gtk_box_pack_start (GTK_BOX (name_box), name_entry, FALSE, FALSE, 5);
+  gtk_box_pack_start (GTK_BOX (name_box), name_entry, TRUE, TRUE, 5);
   gtk_box_pack_start (GTK_BOX (extra), name_box, FALSE, FALSE, 0);
 
   format_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
@@ -2303,10 +2413,19 @@ run_file_chooser_cb (WebKitWebView *web_view,
   info->single = GTK_TOGGLE_BUTTON (single_check);
   info->name = GTK_ENTRY (name_entry);
   info->format = format_combo;
+  info->entry_edited = FALSE;
+  info->entry_internal_set = FALSE;
   file_chooser_info_ref (info);
 
+  g_signal_connect (format_combo, "changed",
+      G_CALLBACK (run_file_chooser_format_combo_cb), info);
+  g_signal_connect (name_entry, "notify::text",
+      G_CALLBACK (run_file_chooser_name_entry_cb), info);
   g_signal_connect (file_chooser, "response",
       G_CALLBACK (run_file_chooser_response_cb), info);
+  g_signal_connect (file_chooser, "selection-changed",
+      G_CALLBACK (run_file_chooser_selection_changed_cb), info);
+  run_file_chooser_format_combo_cb (format_combo, info);
   gtk_widget_show (file_chooser);
 
   g_object_unref (settings);
