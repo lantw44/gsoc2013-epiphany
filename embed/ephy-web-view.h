@@ -144,6 +144,8 @@ const char *               ephy_web_view_get_typed_address        (EphyWebView  
 void                       ephy_web_view_set_typed_address        (EphyWebView               *view,
                                                                    const char                *address);
 gboolean                   ephy_web_view_get_is_blank             (EphyWebView               *view);
+gboolean                   ephy_web_view_get_is_archiving         (EphyWebView               *view);
+void                       ephy_web_view_cancel_archiving         (EphyWebView               *view);
 gboolean                   ephy_web_view_has_modified_forms       (EphyWebView               *view);
 void                       ephy_web_view_get_security_level       (EphyWebView               *view,
                                                                    EphyWebViewSecurityLevel  *level,

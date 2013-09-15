@@ -1659,6 +1659,21 @@ window_cmd_view_page_source (GtkAction *action,
 	}
 }
 
+void
+window_cmd_view_stop_archiving (GtkAction *action,
+				EphyWindow *window)
+{
+	EphyEmbed *embed;
+	EphyWebView *view;
+
+	embed = ephy_embed_container_get_active_child
+          (EPHY_EMBED_CONTAINER (window));
+	g_return_if_fail (EPHY_IS_EMBED (embed));
+	view = ephy_embed_get_web_view (embed);
+
+	ephy_web_view_cancel_archiving (view);
+}
+
 #define ABOUT_GROUP "About"
 
 void

@@ -23,6 +23,7 @@
 		<menuitem name="GoBackDP" action="NavigationBack"/>
 		<menuitem name="GoForwardDP" action="NavigationForward"/>
 		<menuitem name="GoReloadDP" action="ViewReload"/>
+		<menuitem name="StopArchivingDP" action="ViewStopArchiving"/>
 		<separator />
 		<menuitem name="EditCopyDP" action="EditCopy"/>
 		<separator />
