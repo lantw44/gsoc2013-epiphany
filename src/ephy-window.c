@@ -1994,8 +1994,11 @@ populate_context_menu (WebKitWebView *web_view,
 					    priv->toolbar_action_group, "NavigationForward");
 		add_action_to_context_menu (context_menu,
 					    priv->action_group, "ViewReload");
-		add_action_to_context_menu (context_menu,
+
+		if (ephy_web_view_get_is_archiving (EPHY_WEB_VIEW (web_view)))
+			add_action_to_context_menu (context_menu,
 					    priv->action_group, "ViewStopArchiving");
+
 		webkit_context_menu_append (context_menu,
 					    webkit_context_menu_item_new_separator ());
 		add_action_to_context_menu (context_menu,

@@ -2505,7 +2505,7 @@ ephy_web_view_init (EphyWebView *web_view)
   priv = web_view->priv = EPHY_WEB_VIEW_GET_PRIVATE (web_view);
 
   priv->is_blank = TRUE;
-  priv->is_archiving = TRUE;
+  priv->is_archiving = FALSE;
   priv->title = g_strdup (EMPTY_PAGE);
   priv->document_type = EPHY_WEB_VIEW_DOCUMENT_HTML;
   priv->security_level = EPHY_WEB_VIEW_STATE_IS_UNKNOWN;
