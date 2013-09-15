@@ -151,6 +151,8 @@ void                       ephy_web_view_has_modified_forms       (EphyWebView  
 gboolean                  ephy_web_view_has_modified_forms_finish (EphyWebView               *view,
                                                                    GAsyncResult              *result,
                                                                    GError                   **error);
+gboolean                   ephy_web_view_get_is_archiving         (EphyWebView               *view);
+void                       ephy_web_view_cancel_archiving         (EphyWebView               *view);
 void                       ephy_web_view_get_security_level       (EphyWebView               *view,
                                                                    EphyWebViewSecurityLevel  *level,
                                                                    GTlsCertificate          **certificate,

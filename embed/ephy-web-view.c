@@ -76,6 +76,7 @@ struct _EphyWebViewPrivate {
   /* Flags */
   guint is_blank : 1;
   guint is_setting_zoom : 1;
+  guint is_archiving : 1;
   guint load_failed : 1;
   guint history_frozen : 1;
 
@@ -111,6 +112,9 @@ struct _EphyWebViewPrivate {
   /* TLS information. */
   GTlsCertificate *certificate;
   GTlsCertificateFlags tls_errors;
+
+  /* Archive cancellable */
+  GCancellable *archive_cancellable;
 };
 
 typedef struct {
@@ -133,6 +137,7 @@ enum {
   PROP_EMBED_TITLE,
   PROP_TYPED_ADDRESS,
   PROP_IS_BLANK,
+  PROP_IS_ARCHIVING
 };
 
 #define EPHY_WEB_VIEW_GET_PRIVATE(object) (G_TYPE_INSTANCE_GET_PRIVATE ((object), EPHY_TYPE_WEB_VIEW, EphyWebViewPrivate))
@@ -403,6 +408,9 @@ ephy_web_view_get_property (GObject *object,
     case PROP_IS_BLANK:
       g_value_set_boolean (value, priv->is_blank);
       break;
+    case PROP_IS_ARCHIVING:
+      g_value_set_boolean (value, priv->is_archiving);
+      break;
     default:
       break;
   }
@@ -432,6 +440,7 @@ ephy_web_view_set_property (GObject *object,
     case PROP_STATUS_MESSAGE:
     case PROP_EMBED_TITLE:
     case PROP_IS_BLANK:
+    case PROP_IS_ARCHIVING:
       /* read only */
       break;
     default:
@@ -680,6 +689,11 @@ ephy_web_view_dispose (GObject *object)
   }
 
   g_clear_object(&priv->certificate);
+
+  if (priv->archive_cancellable) {
+    g_cancellable_cancel (priv->archive_cancellable);
+    g_clear_object (&priv->archive_cancellable);
+  }
 
   G_OBJECT_CLASS (ephy_web_view_parent_class)->dispose (object);
 }
@@ -1058,6 +1072,19 @@ ephy_web_view_class_init (EphyWebViewClass *klass)
                                    g_param_spec_boolean ("is-blank",
                                                          "Is blank",
                                                          "If the EphyWebView is blank",
+                                                         FALSE,
+                                                         G_PARAM_READABLE | G_PARAM_STATIC_NAME | G_PARAM_STATIC_NICK | G_PARAM_STATIC_BLURB));
+
+/**
+ * EphyWebView:is-archiving:
+ *
+ * Whether the view is archiving files.
+ **/
+  g_object_class_install_property (gobject_class,
+                                   PROP_IS_ARCHIVING,
+                                   g_param_spec_boolean ("is-archiving",
+                                                         "Is archiving",
+                                                         "If the EphyWebView is archiving",
                                                          FALSE,
                                                          G_PARAM_READABLE | G_PARAM_STATIC_NAME | G_PARAM_STATIC_NICK | G_PARAM_STATIC_BLURB));
 
@@ -1891,7 +1918,6 @@ typedef struct {
 
 typedef struct {
   FileChooserInfo *info;
-  GCancellable *cancellable;
   GPtrArray *wk_filenames;
   GSList *filenames;
   char *dest;
@@ -1930,8 +1956,6 @@ archive_info_free (ArchiveInfo *ainfo)
 {
   if (ainfo->info != NULL)
     g_free (ainfo->info);
-  if (ainfo->cancellable != NULL)
-    g_object_unref (ainfo->cancellable);
   if (ainfo->wk_filenames != NULL)
     g_ptr_array_unref (ainfo->wk_filenames);
   if (ainfo->filenames != NULL)
@@ -1966,6 +1990,8 @@ run_file_chooser_cancel (ArchiveInfo *ainfo, GError *error, const char *reason)
     gtk_widget_destroy (error_dialog);
   }
 
+  web_view->priv->is_archiving = FALSE;
+  g_cancellable_reset (web_view->priv->archive_cancellable);
   archive_info_free (ainfo);
 }
 
@@ -1983,6 +2009,8 @@ run_file_chooser_complete (ArchiveInfo *ainfo)
   web_view->priv->status_message = NULL;
   g_object_notify (G_OBJECT (web_view), "status-message");
 
+  web_view->priv->is_archiving = FALSE;
+  g_cancellable_reset (web_view->priv->archive_cancellable);
   archive_info_free (ainfo);
 }
 
@@ -2003,12 +2031,14 @@ run_file_chooser_next (ArchiveInfo *ainfo, gboolean add_to_wk_filenames)
     run_file_chooser_complete (ainfo);
   } else {
     GFile *file;
+    EphyWebView *web_view;
     file = g_file_new_for_path (ainfo->filenames->data);
+    web_view = EPHY_WEB_VIEW (ainfo->info->web_view);
     g_file_query_info_async (file,
                              G_FILE_ATTRIBUTE_STANDARD_TYPE,
                              G_FILE_QUERY_INFO_NONE,
                              G_PRIORITY_DEFAULT,
-                             ainfo->cancellable,
+                             web_view->priv->archive_cancellable,
                              (GAsyncReadyCallback)file_query_info_cb,
                              ainfo);
   }
@@ -2069,6 +2099,7 @@ file_query_info_cb (GFile *file,
                     GAsyncResult *res,
                     ArchiveInfo *ainfo)
 {
+  EphyWebView *web_view;
   GFileInfo *file_info;
   GFileType file_type;
   GError *error;
@@ -2080,6 +2111,12 @@ file_query_info_cb (GFile *file,
   if (file_info == NULL) {
     run_file_chooser_cancel (ainfo, error, _("Error while getting file information"));
     g_error_free (error);
+    return;
+  }
+
+  web_view = EPHY_WEB_VIEW (ainfo->info->web_view);
+  if (g_cancellable_is_cancelled (web_view->priv->archive_cancellable)) {
+    run_file_chooser_cancel (ainfo, NULL, NULL);
     return;
   }
 
@@ -2105,7 +2142,7 @@ file_query_info_cb (GFile *file,
     g_signal_connect (arcreate, "error",
         G_CALLBACK (archive_error_cb), ainfo);
 
-    autoar_create_start_async (arcreate, ainfo->cancellable);
+    autoar_create_start_async (arcreate, web_view->priv->archive_cancellable);
     g_object_unref (arcreate);
     g_free (output);
     g_free (tmp);
@@ -2120,21 +2157,27 @@ run_file_chooser_response_cb (GtkFileChooser *file_chooser,
                               int response_id,
                               FileChooserInfo *info)
 {
+  EphyWebView *web_view;
+  GCancellable *cancellable;
+
+  web_view = EPHY_WEB_VIEW (info->web_view);
+  cancellable = web_view->priv->archive_cancellable;
+  g_cancellable_reset (cancellable);
+
   if (response_id == GTK_RESPONSE_OK || response_id == EPHY_RESPONSE_SELECT) {
     ArchiveInfo *ainfo;
-    GCancellable *cancellable;
     GSList *filenames, *iter;
     int format, filter;
     int c;
+
+    web_view->priv->is_archiving = TRUE;
 
     filenames = gtk_file_chooser_get_filenames (file_chooser);
     autoar_gtk_format_filter_simple_get (info->format, &format, &filter);
     for (iter = filenames, c = 0; iter != NULL; iter = iter->next, c++);
 
-    cancellable = g_cancellable_new ();
     ainfo = g_new (ArchiveInfo, 1);
     ainfo->info = info;
-    ainfo->cancellable = g_object_ref (cancellable);
     ainfo->wk_filenames = g_ptr_array_new_with_free_func (g_free);
     ainfo->filenames = NULL;
     ainfo->dest = NULL;
@@ -2203,8 +2246,6 @@ run_file_chooser_response_cb (GtkFileChooser *file_chooser,
                                (GAsyncReadyCallback)file_query_info_cb,
                                ainfo);
     }
-
-    g_object_unref (cancellable);
 
   } else {
     webkit_file_chooser_request_cancel (info->request);
@@ -2464,6 +2505,7 @@ ephy_web_view_init (EphyWebView *web_view)
   priv = web_view->priv = EPHY_WEB_VIEW_GET_PRIVATE (web_view);
 
   priv->is_blank = TRUE;
+  priv->is_archiving = TRUE;
   priv->title = g_strdup (EMPTY_PAGE);
   priv->document_type = EPHY_WEB_VIEW_DOCUMENT_HTML;
   priv->security_level = EPHY_WEB_VIEW_STATE_IS_UNKNOWN;
@@ -2478,6 +2520,7 @@ ephy_web_view_init (EphyWebView *web_view)
 
   priv->history_service = EPHY_HISTORY_SERVICE (ephy_embed_shell_get_global_history_service (ephy_embed_shell_get_default ()));
   priv->history_service_cancellable = g_cancellable_new ();
+  priv->archive_cancellable = g_cancellable_new ();
 
   g_signal_connect (priv->history_service,
                     "cleared", G_CALLBACK (ephy_web_view_history_cleared_cb),
@@ -2803,6 +2846,32 @@ gboolean
 ephy_web_view_get_is_blank (EphyWebView *view)
 {
   return view->priv->is_blank;
+}
+
+/**
+ * ephy_web_view_get_is_archiving:
+ * @view: an #EphyWebView
+ *
+ * Returns whether the  @view is archiving files.
+ *
+ * Return value: %TRUE if the @view is archiving files.
+ **/
+gboolean
+ephy_web_view_get_is_archiving (EphyWebView *view)
+{
+  return view->priv->is_archiving;
+}
+
+/**
+ * ephy_web_view_cancel_archiving:
+ * @view: an #EphyWebView
+ *
+ * Cancel the  @view's archive work.
+ **/
+void
+ephy_web_view_cancel_archiving (EphyWebView *view)
+{
+  g_cancellable_cancel (view->priv->archive_cancellable);
 }
 
 /**

@@ -168,6 +168,8 @@ static const GtkActionEntry ephy_menu_entries [] = {
 	{ "ViewEncoding", NULL, N_("Text _Encoding"), NULL, NULL, NULL },
 	{ "ViewPageSource", NULL, N_("_Page Source"), "<control>U", NULL,
 	  G_CALLBACK (window_cmd_view_page_source) },
+	{ "ViewStopArchiving", NULL, N_("Stop _Archiving"), NULL, NULL,
+	  G_CALLBACK (window_cmd_view_stop_archiving) },
 
 	/* Bookmarks actions. */
 
@@ -1992,6 +1994,8 @@ populate_context_menu (WebKitWebView *web_view,
 					    priv->toolbar_action_group, "NavigationForward");
 		add_action_to_context_menu (context_menu,
 					    priv->action_group, "ViewReload");
+		add_action_to_context_menu (context_menu,
+					    priv->action_group, "ViewStopArchiving");
 		webkit_context_menu_append (context_menu,
 					    webkit_context_menu_item_new_separator ());
 		add_action_to_context_menu (context_menu,
