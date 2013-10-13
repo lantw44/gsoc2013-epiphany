@@ -661,6 +661,7 @@ ephy_download_do_extract_archive (EphyDownload *download)
   AutoarExtract *arextract;
   GSettings *settings;
   GCancellable *cancellable;
+  char *download_dir_name;
 
   settings = g_settings_new (AUTOAR_PREF_DEFAULT_GSCHEMA_ID);
   arpref = autoar_pref_new_with_gsettings (settings);
@@ -673,9 +674,11 @@ ephy_download_do_extract_archive (EphyDownload *download)
     return;
   }
 
+  download_dir_name = g_path_get_dirname (download->priv->destination);
   arextract = autoar_extract_new (download->priv->destination,
-                                  ephy_file_get_downloads_dir (),
+                                  download_dir_name,
                                   arpref);
+  g_free (download_dir_name);
 
   if (download->priv->arextract != NULL)
     g_object_unref (download->priv->arextract);
